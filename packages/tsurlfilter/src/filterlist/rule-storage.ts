@@ -6,6 +6,7 @@ import { NetworkRule } from '../rules/network-rule';
 import { HostRule } from '../rules/host-rule';
 import { ScannerType } from './scanner/scanner-type';
 import { RuleFactory } from '../rules/rule-factory';
+import { ListCache } from './list-cache';
 import { logger } from '../utils/logger';
 
 /**
@@ -34,14 +35,11 @@ export class RuleStorage {
     private readonly listsMap: Map<number, IRuleList>;
 
     /**
-     * Cache with the rules which are stored inside this cache instance..
+     * Cache with the rules which were retrieved.
+     * We use double layer map in order to achieve better performance. The reason is a fact that a map with number
+     * keys is much faster than a map with string keys. So we have a structure like Map<number, Map<number, IRule>>.
      */
-    private readonly cache: Map<number, IRule>;
-
-    /**
-     * Api for managing rule scanners for each filter list.
-     */
-    declare private scanner: RuleStorageScanner;
+    private readonly cache: Map<number, ListCache>;
 
     /**
      * Constructor
@@ -53,7 +51,7 @@ export class RuleStorage {
     constructor(lists: IRuleList[]) {
         this.lists = lists;
         this.listsMap = new Map<number, IRuleList>();
-        this.cache = new Map<number, IRule>();
+        this.cache = new Map<number, ListCache>();
 
         this.lists.forEach((list) => {
             const filterListId = list.getId();
@@ -73,8 +71,7 @@ export class RuleStorage {
      */
     createRuleStorageScanner(scannerType: ScannerType): RuleStorageScanner {
         const scanners: RuleScanner[] = this.lists.map((list) => list.newScanner(scannerType));
-        this.scanner = new RuleStorageScanner(scanners);
-        return this.scanner;
+        return new RuleStorageScanner(scanners);
     }
 
     /**
@@ -84,31 +81,30 @@ export class RuleStorage {
      * @param ignoreHost rules could be retrieved as host rules
      */
     retrieveRule(storageIdx: number, ignoreHost = true): IRule | null {
-        const rule = this.cache.get(storageIdx);
+        const [listId, ruleIdx] = RuleStorageScanner.storageIdxToRuleListIdx(storageIdx);
+
+        const rule = this.getFromCache(listId, ruleIdx);
         if (rule) {
             return rule;
         }
 
-        const [listId, ruleId] = this.scanner.getIds(storageIdx);
-
         const list = this.listsMap.get(listId);
-
         if (!list) {
             logger.warn(`Failed to retrieve list ${listId}, should not happen in normal operation`);
 
             return null;
         }
 
-        const ruleText = list.retrieveRuleText(ruleId);
+        const ruleText = list.retrieveRuleText(ruleIdx);
         if (!ruleText) {
-            logger.warn(`Failed to retrieve rule ${ruleId}, should not happen in normal operation`);
+            logger.warn(`Failed to retrieve rule ${ruleIdx}, should not happen in normal operation`);
 
             return null;
         }
 
         const result = RuleFactory.createRule(ruleText, listId, false, false, ignoreHost);
         if (result) {
-            this.cache.set(storageIdx, result);
+            this.saveToCache(listId, ruleIdx, result);
         }
 
         return result;
@@ -156,6 +152,37 @@ export class RuleStorage {
      * Returns the size of the cache.
      */
     getCacheSize(): number {
-        return this.cache.size;
+        return Array.from(this.cache.values())
+            .reduce((acc, listCache) => acc + listCache.getSize(), 0);
+    }
+
+    /**
+     * Saves rule to cache
+     *
+     * @param listId
+     * @param ruleIdx
+     * @param rule
+     */
+    private saveToCache(listId: number, ruleIdx: number, rule: IRule): void {
+        let listCache = this.cache.get(listId);
+        if (!listCache) {
+            listCache = new ListCache();
+            this.cache.set(listId, listCache);
+        }
+        listCache.set(ruleIdx, rule);
+    }
+
+    /**
+     * Retrieves rule form cache
+     *
+     * @param listId
+     * @param ruleIdx
+     */
+    private getFromCache(listId: number, ruleIdx: number): IRule | undefined {
+        const listCache = this.cache.get(listId);
+        if (!listCache) {
+            return undefined;
+        }
+        return listCache.get(ruleIdx);
     }
 }

@@ -36,9 +36,4 @@ export class FileLineReader implements ILineReader {
     getCurrentPos(): number {
         return this.innerReader.getCurrentPos();
     }
-
-    /** @inheritdoc */
-    getDataLength(): number {
-        return this.innerReader.getDataLength();
-    }
 }

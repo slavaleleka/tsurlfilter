@@ -13,9 +13,4 @@ export interface ILineReader {
      * Returns the current position of this line reader.
      */
     getCurrentPos(): number;
-
-    /**
-     * Returns the length of the data.
-     */
-    getDataLength(): number;
 }
